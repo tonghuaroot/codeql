@@ -7,7 +7,7 @@
 private import python
 private import semmle.python.dataflow.new.DataFlow
 private import semmle.python.dataflow.new.internal.ImportStar
-private import semmle.python.dataflow.new.TypeTracker
+private import semmle.python.dataflow.new.TypeTracking
 private import semmle.python.dataflow.new.internal.DataFlowPrivate
 
 /**
@@ -65,31 +65,75 @@ private import semmle.python.dataflow.new.internal.DataFlowPrivate
  */
 module ImportResolution {
   /**
-   * Holds if the module `m` defines a name `name` by assigning `defn` to it. This is an
-   * overapproximation, as `name` may not in fact be exported (e.g. by defining an `__all__` that does
-   * not include `name`).
+   * Holds if there is an ESSA step from `defFrom` to `defTo`, which should be allowed
+   * for import resolution.
+   */
+  private predicate allowedEssaImportStep(EssaDefinition defFrom, EssaDefinition defTo) {
+    // to handle definitions guarded by if-then-else
+    defFrom = defTo.(PhiFunction).getAnInput()
+    or
+    // refined variable
+    // example: https://github.com/nvbn/thefuck/blob/ceeaeab94b5df5a4fe9d94d61e4f6b0bbea96378/thefuck/utils.py#L25-L45
+    defFrom = defTo.(EssaNodeRefinement).getInput().getDefinition()
+  }
+
+  /**
+   * Holds if the module `m` defines a name `name` with the value `val`. The value
+   * represents the value `name` will have at the end of the module (the last place we
+   * have def-use flow to).
+   *
+   * Note: The handling of re-exporting imports is a bit simplistic. We assume that if
+   * an import is made, it will be re-exported (which will not be the case if a new
+   * value is assigned to the name, or it is deleted).
    */
   pragma[nomagic]
-  predicate module_export(Module m, string name, DataFlow::CfgNode defn) {
-    exists(EssaVariable v, EssaDefinition essaDef |
-      v.getName() = name and
-      v.getAUse() = ImportStar::getStarImported*(m).getANormalExit() and
-      (
-        essaDef = v.getDefinition()
-        or
-        // to handle definitions guarded by if-then-else
-        essaDef = v.getDefinition().(PhiFunction).getAnInput()
-      )
+  predicate module_export(Module m, string name, DataFlow::Node val) {
+    // Definitions made inside `m` itself
+    //
+    // for code such as `foo = ...; foo.bar = ...` there will be TWO
+    // EssaDefinition/EssaVariable. One for `foo = ...` (AssignmentDefinition) and one
+    // for `foo.bar = ...`. The one for `foo.bar = ...` (EssaNodeRefinement). The
+    // EssaNodeRefinement is the one that will reach the end of the module (normal
+    // exit).
+    //
+    // However, we cannot just use the EssaNodeRefinement as the `val`, because the
+    // normal data-flow depends on use-use flow, and use-use flow targets CFG nodes not
+    // EssaNodes. So we need to go back from the EssaDefinition/EssaVariable that
+    // reaches the end of the module, to the first definition of the variable, and then
+    // track forwards using use-use flow to find a suitable CFG node that has flow into
+    // it from use-use flow.
+    exists(EssaVariable lastUseVar, EssaVariable firstDef |
+      lastUseVar.getName() = name and
+      // we ignore special variable $ introduced by our analysis (not used for anything)
+      // we ignore special variable * introduced by `from <pkg> import *` -- TODO: understand why we even have this?
+      not name in ["$", "*"] and
+      lastUseVar.getAUse() = m.getANormalExit() and
+      allowedEssaImportStep*(firstDef, lastUseVar) and
+      not allowedEssaImportStep(_, firstDef)
     |
-      defn.getNode() = essaDef.(AssignmentDefinition).getValue()
+      not LocalFlow::defToFirstUse(firstDef, _) and
+      val.asCfgNode() = firstDef.getDefinition().(EssaNodeDefinition).getDefiningNode()
       or
-      defn.getNode() = essaDef.(ArgumentRefinement).getArgument()
+      exists(ControlFlowNode mid, ControlFlowNode end |
+        LocalFlow::defToFirstUse(firstDef, mid) and
+        LocalFlow::useToNextUse*(mid, end) and
+        not LocalFlow::useToNextUse(end, _) and
+        val.asCfgNode() = end
+      )
     )
     or
+    // re-exports from `from <pkg> import *`
+    exists(Module importedFrom |
+      importedFrom = ImportStar::getStarImported(m) and
+      module_export(importedFrom, name, val) and
+      potential_module_export(importedFrom, name)
+    )
+    or
+    // re-exports from `import <pkg>` or `from <pkg> import <stuff>`
     exists(Alias a |
-      defn.asExpr() = [a.getValue(), a.getValue().(ImportMember).getModule()] and
+      val.asExpr() = a.getValue() and
       a.getAsname().(Name).getId() = name and
-      defn.getScope() = m
+      val.getScope() = m
     )
   }
 
@@ -102,7 +146,7 @@ module ImportResolution {
       def.getValue() = n and
       def.(NameNode).getId() = "__all__" and
       def.getScope() = m and
-      any(StrConst s | s.getText() = name) = n.getAnElement().getNode()
+      any(StringLiteral s | s.getText() = name) = n.getAnElement().getNode()
     )
   }
 
@@ -166,7 +210,7 @@ module ImportResolution {
       exists(SubscriptNode sub |
         sub.getObject() = sys_modules_reference().asCfgNode() and
         sub.getIndex() = n and
-        n.getNode().(StrConst).getText() = name and
+        n.getNode().(StringLiteral).getText() = name and
         sub.(DefinitionNode).getValue() = mod.asCfgNode() and
         mod = getModuleReference(result)
       )
@@ -183,7 +227,7 @@ module ImportResolution {
    */
   pragma[inline]
   private Module getModuleFromName(string name) {
-    isPreferredModuleForName(result.getFile(), name + ["", ".__init__"])
+    isPreferredModuleForName(result.getFile(), [name, name + ".__init__"])
   }
 
   /** Gets the module from which attributes are imported by `i`. */
@@ -234,6 +278,12 @@ module ImportResolution {
       )
   }
 
+  /** Join-order helper for `getImmediateModuleReference`. */
+  pragma[nomagic]
+  private predicate module_reference_accesses(DataFlow::AttrRead ar, Module p, string attr_name) {
+    ar.accesses(getModuleReference(p), attr_name)
+  }
+
   /**
    * Gets a dataflow node that is an immediate reference to the module `m`.
    *
@@ -250,25 +300,34 @@ module ImportResolution {
     )
     or
     // Reading an attribute on a module may return a submodule (or subpackage).
-    exists(DataFlow::AttrRead ar, Module p, string attr_name |
-      ar.accesses(getModuleReference(p), attr_name) and
-      result = ar
-    |
+    exists(Module p, string attr_name | module_reference_accesses(result, p, attr_name) |
       m = getModuleFromName(p.getPackageName() + "." + attr_name)
     )
     or
     // This is also true for attributes that come from reexports.
     exists(Module reexporter, string attr_name |
-      result.(DataFlow::AttrRead).accesses(getModuleReference(reexporter), attr_name) and
+      module_reference_accesses(result, reexporter, attr_name) and
       module_reexport(reexporter, attr_name, m)
     )
     or
-    // Submodules that are implicitly defined with relative imports of the form `from .foo import ...`.
-    // In practice, we create a definition for each module in a package, even if it is not imported.
-    exists(string submodule, Module package |
-      SsaSource::init_module_submodule_defn(result.asVar().getSourceVariable(),
-        package.getEntryNode()) and
-      m = getModuleFromName(package.getPackageName() + "." + submodule)
+    // submodules of packages will be available as `<pkg>.<submodule>` after doing
+    // `import <pkg>.<submodule>` at least once in the program, or can be directly
+    // imported with `from <pkg> import <submodule>` (even with an empty
+    // `<pkg>.__init__` file).
+    //
+    // Until an import of `<pkg>.<submodule>` is executed, it is technically possible
+    // that `<pkg>.<submodule>` (or `from <pkg> import <submodule>`) can refer to an
+    // attribute set in `<pkg>.__init__`.
+    //
+    // Therefore, if there is an attribute defined in `<pkg>.__init__` with the same
+    // name as a submodule, we always consider that this attribute _could_ be a
+    // reference to the submodule, even if we don't know that the submodule has been
+    // imported yet.
+    exists(string submodule, Module package, EssaVariable var |
+      submodule = var.getName() and
+      SsaSource::init_module_submodule_defn(var.getSourceVariable(), package.getEntryNode()) and
+      m = getModuleFromName(package.getPackageName() + "." + submodule) and
+      result.asCfgNode() = var.getDefinition().(EssaNodeDefinition).getDefiningNode()
     )
   }
 
