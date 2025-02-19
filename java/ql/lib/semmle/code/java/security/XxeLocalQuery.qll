@@ -8,16 +8,21 @@ private import semmle.code.java.security.XxeQuery
 /**
  * A taint-tracking configuration for unvalidated local user input that is used in XML external entity expansion.
  */
-class XxeLocalConfig extends TaintTracking::Configuration {
-  XxeLocalConfig() { this = "XxeLocalConfig" }
+deprecated module XxeLocalConfig implements DataFlow::ConfigSig {
+  predicate isSource(DataFlow::Node src) { src instanceof LocalUserInput }
 
-  override predicate isSource(DataFlow::Node src) { src instanceof LocalUserInput }
+  predicate isSink(DataFlow::Node sink) { sink instanceof XxeSink }
 
-  override predicate isSink(DataFlow::Node sink) { sink instanceof XxeSink }
+  predicate isBarrier(DataFlow::Node sanitizer) { sanitizer instanceof XxeSanitizer }
 
-  override predicate isSanitizer(DataFlow::Node sanitizer) { sanitizer instanceof XxeSanitizer }
-
-  override predicate isAdditionalTaintStep(DataFlow::Node n1, DataFlow::Node n2) {
+  predicate isAdditionalFlowStep(DataFlow::Node n1, DataFlow::Node n2) {
     any(XxeAdditionalTaintStep s).step(n1, n2)
   }
 }
+
+/**
+ * DEPRECATED: Use `XxeFlow` instead and configure threat model sources to include `local`.
+ *
+ * Detect taint flow of unvalidated local user input that is used in XML external entity expansion.
+ */
+deprecated module XxeLocalFlow = TaintTracking::Global<XxeLocalConfig>;

@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
-using Semmle.Autobuild.Shared;
 using Semmle.Util;
+using Semmle.Autobuild.Shared;
 
 namespace Semmle.Autobuild.CSharp
 {
@@ -84,8 +84,8 @@ namespace Semmle.Autobuild.CSharp
                 This may lead to subsequent failures. You can check for common causes for missing project files:
 
                 - Ensure that the project is built using the {runsOnDocsUrl.ToMarkdownLink("intended operating system")} and that filenames on case-sensitive platforms are correctly specified.
-                - If your repository uses Git submodules, ensure that those are {checkoutDocsUrl.ToMarkdownLink("checked out")} before the CodeQL action is run.
-                - If you auto-generate some project files as part of your build process, ensure that these are generated before the CodeQL action is run.
+                - If your repository uses Git submodules, ensure that those are {checkoutDocsUrl.ToMarkdownLink("checked out")} before the CodeQL Action is run.
+                - If you auto-generate some project files as part of your build process, ensure that these are generated before the CodeQL Action is run.
                 """
             );
         }
@@ -99,7 +99,7 @@ namespace Semmle.Autobuild.CSharp
         {
             if (!match.Groups.TryGetValue("projectFile", out var projectFile))
                 throw new ArgumentException("Expected regular expression match to contain projectFile");
-            if (!match.Groups.TryGetValue("location", out var location))
+            if (!match.Groups.TryGetValue("location", out _))
                 throw new ArgumentException("Expected regular expression match to contain location");
 
             var result = classifier.Results.OfType<Result>().FirstOrDefault();

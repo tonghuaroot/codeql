@@ -481,6 +481,9 @@ class RegExpLiteral extends @regexp_literal, Literal, RegExpParent {
   /** Holds if this regular expression has an `s` flag. */
   predicate isDotAll() { RegExp::isDotAll(this.getFlags()) }
 
+  /** Holds if this regular expression has an `v` flag. */
+  predicate isUnicodeSets() { RegExp::isUnicodeSets(this.getFlags()) }
+
   override string getAPrimaryQlClass() { result = "RegExpLiteral" }
 }
 
@@ -2807,6 +2810,7 @@ class FunctionBindExpr extends @bind_expr, Expr {
  *
  * ```
  * import("fs")
+ * import("foo", { with: { type: "json" }})
  * ```
  */
 class DynamicImportExpr extends @dynamic_import, Expr, Import {
@@ -2818,6 +2822,27 @@ class DynamicImportExpr extends @dynamic_import, Expr, Import {
   }
 
   override PathExpr getImportedPath() { result = this.getSource() }
+
+  /**
+   * Gets the second "argument" to the import expression, that is, the `Y` in `import(X, Y)`.
+   *
+   * For example, gets the `{ with: { type: "json" }}` expression in the following:
+   * ```js
+   * import('foo', { with: { type: "json" }})
+   * ```
+   */
+  Expr getImportOptions() { result = this.getChildExpr(1) }
+
+  /**
+   * DEPRECATED: use `getImportOptions` instead.
+   * Gets the second "argument" to the import expression, that is, the `Y` in `import(X, Y)`.
+   *
+   * For example, gets the `{ with: { type: "json" }}` expression in the following:
+   * ```js
+   * import('foo', { with: { type: "json" }})
+   * ```
+   */
+  deprecated Expr getImportAttributes() { result = this.getImportOptions() }
 
   override Module getEnclosingModule() { result = this.getTopLevel() }
 

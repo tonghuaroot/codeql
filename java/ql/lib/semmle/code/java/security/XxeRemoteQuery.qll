@@ -8,16 +8,21 @@ private import semmle.code.java.security.XxeQuery
 /**
  * A taint-tracking configuration for unvalidated remote user input that is used in XML external entity expansion.
  */
-class XxeConfig extends TaintTracking::Configuration {
-  XxeConfig() { this = "XxeConfig" }
+module XxeConfig implements DataFlow::ConfigSig {
+  predicate isSource(DataFlow::Node src) { src instanceof ActiveThreatModelSource }
 
-  override predicate isSource(DataFlow::Node src) { src instanceof RemoteFlowSource }
+  predicate isSink(DataFlow::Node sink) { sink instanceof XxeSink }
 
-  override predicate isSink(DataFlow::Node sink) { sink instanceof XxeSink }
+  predicate isBarrier(DataFlow::Node sanitizer) { sanitizer instanceof XxeSanitizer }
 
-  override predicate isSanitizer(DataFlow::Node sanitizer) { sanitizer instanceof XxeSanitizer }
-
-  override predicate isAdditionalTaintStep(DataFlow::Node n1, DataFlow::Node n2) {
+  predicate isAdditionalFlowStep(DataFlow::Node n1, DataFlow::Node n2) {
     any(XxeAdditionalTaintStep s).step(n1, n2)
   }
+
+  predicate observeDiffInformedIncrementalMode() { any() }
 }
+
+/**
+ * Detect taint flow of unvalidated remote user input that is used in XML external entity expansion.
+ */
+module XxeFlow = TaintTracking::Global<XxeConfig>;
